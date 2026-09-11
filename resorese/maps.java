@@ -1,3 +1,5 @@
+package org.csu.resourse;
+
 import org.csu.model.base.GameMap;
 
 import java.util.List;
