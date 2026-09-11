@@ -11,8 +11,9 @@ import java.util.Set;
 /**
  * 箱子：可被推动的游戏元素，支持<b>箱子联动</b>。
  * <p>
- * 联动规则：通过 {@link #linkWith(Box)} 关联的箱子构成联动组，
- * 推动组内任意一个箱子时，整组箱子同时向同一方向移动一格；
+ * 联动规则：通过 {@link #linkWith(Box)} 关联的箱子（相同字母）在
+ * <b>相互接触（上下左右相邻）后</b>才联动：推动其中一个箱子时，
+ * 与它接触的联动箱（以及通过接触链相连的联动箱）一起移动；
  * 只有整组箱子全部可推动时，推动才会成功。
  * <p>
  * 注意：联动关系只作用于玩家推动；传送带只移动其上的单个箱子，
@@ -67,9 +68,11 @@ public class Box implements Pushable {
     }
 
     /**
-     * 深度优先收集整个联动组（包括自身），组内箱子传递相连。
+     * 深度优先收集与被推箱子接触的联动组（包括自身）：
+     * 只有相互接触（上下左右相邻）的联动箱才会被带动，
+     * 接触链之外的联动箱保持原地不动。
      *
-     * @return 联动组内所有箱子
+     * @return 本次推动会一起移动的所有箱子
      */
     public Set<Box> collectLinkedGroup() {
         Set<Box> group = new HashSet<>();
@@ -82,8 +85,18 @@ public class Box implements Pushable {
             return;
         }
         for (Box box : linkedBoxes) {
-            box.collectLinkedGroup(visited);
+            if (isTouching(box)) {
+                box.collectLinkedGroup(visited);
+            }
         }
+    }
+
+    /**
+     * 两个箱子是否相互接触（上下左右相邻一格）。
+     */
+    private boolean isTouching(Box other) {
+        return Math.abs(position.x() - other.position.x())
+                + Math.abs(position.y() - other.position.y()) == 1;
     }
 
     // ==================== 位置与状态 ====================

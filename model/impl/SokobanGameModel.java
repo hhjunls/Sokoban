@@ -17,11 +17,11 @@ import java.util.Set;
  * <ul>
  *   <li><b>玩家移动</b>：目标格是地板/目标点/传送带可直接走；
  *       目标格是箱子则尝试推动，否则原地不动。</li>
- *   <li><b>箱子联动</b>：推动某箱子时，与其联动的整组箱子一起移动，
- *       只有整组全部可推动时推动才会成功（先校验后移动，原子操作）。</li>
+ *   <li><b>箱子联动</b>：相同字母的箱子相互接触（上下左右相邻）后才联动，
+ *       推动时接触链上的箱子一起移动，只有整组全部可推动时推动才会成功
+ *       （先校验后移动，原子操作）。</li>
  *   <li><b>传送带</b>：玩家每次成功移动后结算一次，传送带上的箱子沿
- *       传送方向自动移动一格；箱子落到另一条传送带上会继续传导，
- *       直到所有箱子静止或达到步数上限。</li>
+ *       传送方向自动移动一格（一格一格移动，不连续传导）。</li>
  *   <li><b>胜利条件</b>：所有目标点都被箱子覆盖。</li>
  * </ul>
  */
@@ -122,25 +122,17 @@ public class SokobanGameModel implements GameModel {
 
     /**
      * 结算传送带：所有位于传送带上的箱子沿传送方向移动一格。
-     * 循环多轮以支持连续传导（箱子落到另一条传送带上会继续移动），
-     * 步数上限防止两条传送带对推导致死循环。
+     * 玩家每成功移动一次只结算一格：箱子即使落到另一条传送带上，
+     * 也要等玩家下一次移动才会继续被传送。
      */
     private void resolveConveyors() {
-        int maxSteps = map.getWidth() * map.getHeight();
-        for (int step = 0; step < maxSteps; step++) {
-            boolean moved = false;
-            for (Box box : map.getBoxes()) {
-                if (map.getCell(box.getPosition()) instanceof Conveyor conveyor) {
-                    Direction dir = conveyor.getDirection();
-                    Position target = box.getPosition().move(dir);
-                    if (map.isFree(target)) {
-                        box.push(dir, map);
-                        moved = true;
-                    }
+        for (Box box : map.getBoxes()) {
+            if (map.getCell(box.getPosition()) instanceof Conveyor conveyor) {
+                Direction dir = conveyor.getDirection();
+                Position target = box.getPosition().move(dir);
+                if (map.isFree(target)) {
+                    box.push(dir, map);
                 }
-            }
-            if (!moved) {
-                break;
             }
         }
     }
