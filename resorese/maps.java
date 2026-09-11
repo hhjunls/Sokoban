@@ -1,5 +1,3 @@
-package org.csu.model;
-
 import org.csu.model.base.GameMap;
 
 import java.util.List;
