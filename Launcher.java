@@ -11,22 +11,12 @@ import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Scene;
-import javafx.scene.canvas.Canvas;
-import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.input.KeyCode;
-import javafx.scene.layout.Pane;
-import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import org.csu.controller.GameController;
-import org.csu.model.api.Element;
 import org.csu.model.base.Direction;
 import org.csu.model.base.GameMap;
-import org.csu.model.base.Position;
-import org.csu.model.impl.Box;
-import org.csu.model.impl.Conveyor;
-import org.csu.model.impl.Goal;
-import org.csu.model.impl.Player;
-import org.csu.model.impl.Wall;
+import org.csu.view.GameView;
 
 /**
  * 游戏主类（Launcher）：组装 Model / View / Controller，
@@ -36,7 +26,7 @@ import org.csu.model.impl.Wall;
  * 与显示器刷新率解耦；长时间卡顿时用 {@link #MAX_FRAME_TIME} 钳制单帧耗时，
  * 避免"死亡螺旋"式追帧。
  * <p>
- * 操作：方向键 / WASD 移动，R 重置关卡，N 下一关，Esc 退出。
+ * 操作：方向键 / WASD 移动，R 重置关卡，N 下一关，数字键选关，Esc 退出。
  */
 public class Launcher extends Application {
 
@@ -44,9 +34,6 @@ public class Launcher extends Application {
     private static final double FIXED_STEP = 1.0 / 60.0;
     /** 单帧最大耗时上限（秒），防止长卡顿后疯狂追帧 */
     private static final double MAX_FRAME_TIME = 0.25;
-    /** 每个格子的像素尺寸 */
-    private static final double CELL_SIZE = 40;
-
     /** 关卡资源列表（resources 目录下），按顺序循环加载 */
     private static final String[] LEVEL_RESOURCES = {
             "/maps/1.txt",
@@ -54,36 +41,56 @@ public class Launcher extends Application {
             "/maps/3.txt"
     };
 
-    // ---- 视图配色 ----
-    private static final Color WALL_FILL = Color.web("#5a5a5a");
-    private static final Color FLOOR_FILL = Color.web("#e8e0c9");
-    private static final Color GRID_LINE = Color.web("#d5cbb0");
-    private static final Color GOAL_MARK = Color.web("#d9534f");
-    private static final Color CONVEYOR_FILL = Color.web("#7387c4");
-    private static final Color ARROW_FILL = Color.web("#ffffff");
-    private static final Color BOX_FILL = Color.web("#b8860b");
-    private static final Color BOX_ON_GOAL_FILL = Color.web("#2e8b57");
-    private static final Color PLAYER_FILL = Color.web("#2f6fed");
-
     private GameController controller;
-    private Canvas canvas;
+    private GameView view;
     private Stage stage;
     /** 当前关卡序号（从 0 开始） */
     private int currentLevelIndex;
+    /** 窗口装饰尺寸（标题栏 + 边框），用于按内容尺寸精确适配窗口 */
+    private double windowDecorationWidth;
+    private double windowDecorationHeight;
 
     @Override
     public void start(Stage stage) {
         this.stage = stage;
 
-        // ---- 组装 MVC：Controller 通过回调驱动 View、退出 ----
-        controller = new GameController(this::render, () -> Platform.exit());
-        canvas = new Canvas(0, 0);
+        // ---- View：地图渲染与 UI，按钮动作回交给 Controller / Launcher ----
+        view = new GameView(LEVEL_RESOURCES.length, new GameView.Actions() {
+            @Override
+            public void reset() {
+                controller.resetGame();
+            }
 
-        // ---- 加载第一关并显示窗口 ----
+            @Override
+            public void nextLevel() {
+                loadLevel(currentLevelIndex + 1);
+            }
+
+            @Override
+            public void selectLevel(int levelIndex) {
+                loadLevel(levelIndex);
+            }
+        });
+
+        // ---- 组装 MVC：Controller 通过回调驱动 View、退出 ----
+        controller = new GameController(this::renderView, () -> Platform.exit());
+
+        // ---- 场景只创建一次：尺寸动态跟随视图首选尺寸 ----
+        Scene scene = new Scene(view);
+        scene.setOnKeyPressed(event -> handleKey(event.getCode()));
+        stage.setScene(scene);
+
+        // ---- 加载关卡并显示窗口 ----
         stage.setTitle("推箱子 Sokoban");
         stage.setResizable(false);
         loadLevel(0);
         stage.show();
+
+        // 记录窗口装饰尺寸（初始窗口尺寸与场景尺寸之差）
+        windowDecorationWidth = stage.getWidth() - scene.getWidth();
+        windowDecorationHeight = stage.getHeight() - scene.getHeight();
+        // 窗口完全就绪后再按内容尺寸校正一次（首次显示时的尺寸可能滞后）
+        Platform.runLater(this::fitWindowToView);
 
         controller.startGame();
         startGameLoop();
@@ -100,16 +107,22 @@ public class Launcher extends Application {
         List<String> lines = readLevelLines(LEVEL_RESOURCES[currentLevelIndex]);
         controller.loadLevel(lines.toArray(new String[0]));
 
-        GameMap map = controller.getMap();
-        canvas.setWidth(map.getWidth() * CELL_SIZE);
-        canvas.setHeight(map.getHeight() * CELL_SIZE);
+        // 通知视图进入新关卡（高亮关卡按钮、按地图尺寸重置画布），再让窗口适配新尺寸
+        view.beginLevel(currentLevelIndex + 1, controller.getMap());
+        fitWindowToView();
+    }
 
-        Scene scene = new Scene(new Pane(canvas), canvas.getWidth(), canvas.getHeight());
-        scene.setOnKeyPressed(event -> handleKey(event.getCode()));
-        stage.setScene(scene);
-        if (stage.isShowing()) {
-            stage.sizeToScene();
+    /**
+     * 让窗口按视图所需尺寸适配（切关后地图尺寸不同）。
+     * 非可调整大小的窗口 sizeToScene 不生效，且布局尺寸更新滞后，
+     * 因此直接用视图计算的内容尺寸 + 窗口装饰尺寸设置窗口大小。
+     */
+    private void fitWindowToView() {
+        if (!stage.isShowing()) {
+            return;
         }
+        stage.setWidth(view.computeRequiredWidth() + windowDecorationWidth);
+        stage.setHeight(view.computeRequiredHeight() + windowDecorationHeight);
     }
 
     /**
@@ -153,7 +166,7 @@ public class Launcher extends Application {
     }
 
     /**
-     * 键盘事件分发：方向键 / WASD 移动，R 重置，N 下一关，Esc 退出。
+     * 键盘事件分发：方向键 / WASD 移动，R 重置，N 下一关，数字键选关，Esc 退出。
      */
     private void handleKey(KeyCode code) {
         switch (code) {
@@ -164,7 +177,16 @@ public class Launcher extends Application {
             case R -> controller.resetGame();
             case N -> loadLevel(currentLevelIndex + 1);
             case ESCAPE -> controller.quitGame();
-            default -> { }
+            default -> {
+                // 数字键 1-9 快速选关
+                String name = code.getName();
+                if (name.length() == 1 && Character.isDigit(name.charAt(0))) {
+                    int levelNumber = name.charAt(0) - '0';
+                    if (levelNumber >= 1 && levelNumber <= LEVEL_RESOURCES.length) {
+                        loadLevel(levelNumber - 1);
+                    }
+                }
+            }
         }
     }
 
@@ -205,92 +227,14 @@ public class Launcher extends Application {
     // ==================== 渲染 ====================
 
     /**
-     * 视图渲染回调（由 GameController 调用）：绘制地形层、箱子层、玩家层，
-     * 并同步窗口标题中的步数与胜利状态。
+     * 渲染回调（由 GameController 脏标记触发）：
+     * 交给 View 绘制地图，并同步状态栏步数、通关横幅与窗口标题。
      */
-    private void render(GameMap map) {
-        GraphicsContext g = canvas.getGraphicsContext2D();
-        g.clearRect(0, 0, canvas.getWidth(), canvas.getHeight());
-
-        // 1. 地形层：墙 / 地板 / 目标点 / 传送带
-        for (int y = 0; y < map.getHeight(); y++) {
-            for (int x = 0; x < map.getWidth(); x++) {
-                drawTerrain(g, map, x, y);
-            }
-        }
-        // 2. 箱子层
-        for (Box box : map.getBoxes()) {
-            drawBox(g, box);
-        }
-        // 3. 玩家层
-        drawPlayer(g, map.getPlayer());
-
+    private void renderView(GameMap map) {
+        view.render(map);
+        view.updateStatus(controller.getMoveCount(), controller.isGameWin());
         stage.setTitle("推箱子 Sokoban - 第 " + (currentLevelIndex + 1) + "/" + LEVEL_RESOURCES.length + " 关"
-                + " - 步数: " + controller.getMoveCount()
                 + (controller.isGameWin() ? " - 通关！按 N 进入下一关" : ""));
-    }
-
-    private void drawTerrain(GraphicsContext g, GameMap map, int x, int y) {
-        Element cell = map.getCell(x, y);
-        double px = x * CELL_SIZE;
-        double py = y * CELL_SIZE;
-
-        if (cell instanceof Wall) {
-            g.setFill(WALL_FILL);
-            g.fillRect(px, py, CELL_SIZE, CELL_SIZE);
-            return;
-        }
-        // 地板底色与网格线
-        g.setFill(FLOOR_FILL);
-        g.fillRect(px, py, CELL_SIZE, CELL_SIZE);
-        g.setStroke(GRID_LINE);
-        g.strokeRect(px + 0.5, py + 0.5, CELL_SIZE - 1, CELL_SIZE - 1);
-
-        if (cell instanceof Goal) {
-            // 目标点：中央圆点
-            double d = CELL_SIZE * 0.26;
-            g.setFill(GOAL_MARK);
-            g.fillOval(px + (CELL_SIZE - d) / 2, py + (CELL_SIZE - d) / 2, d, d);
-        } else if (cell instanceof Conveyor conveyor) {
-            // 传送带：底色 + 方向箭头
-            g.setFill(CONVEYOR_FILL);
-            g.fillRect(px, py, CELL_SIZE, CELL_SIZE);
-            drawArrow(g, px, py, conveyor.getDirection());
-        }
-    }
-
-    private void drawArrow(GraphicsContext g, double px, double py, Direction direction) {
-        double cx = px + CELL_SIZE / 2;
-        double cy = py + CELL_SIZE / 2;
-        double r = CELL_SIZE * 0.26;
-        double[][] vertices = switch (direction) {
-            case UP -> new double[][]{
-                    {cx, cx - r, cx + r}, {cy - r, cy + r, cy + r}};
-            case DOWN -> new double[][]{
-                    {cx, cx - r, cx + r}, {cy + r, cy - r, cy - r}};
-            case LEFT -> new double[][]{
-                    {cx - r, cx + r, cx + r}, {cy, cy - r, cy + r}};
-            case RIGHT -> new double[][]{
-                    {cx + r, cx - r, cx - r}, {cy, cy - r, cy + r}};
-        };
-        g.setFill(ARROW_FILL);
-        g.fillPolygon(vertices[0], vertices[1], 3);
-    }
-
-    private void drawBox(GraphicsContext g, Box box) {
-        Position p = box.getPosition();
-        double padding = CELL_SIZE * 0.12;
-        g.setFill(box.isOnGoal() ? BOX_ON_GOAL_FILL : BOX_FILL);
-        g.fillRoundRect(p.x() * CELL_SIZE + padding, p.y() * CELL_SIZE + padding,
-                CELL_SIZE - 2 * padding, CELL_SIZE - 2 * padding, 8, 8);
-    }
-
-    private void drawPlayer(GraphicsContext g, Player player) {
-        Position p = player.getPosition();
-        double padding = CELL_SIZE * 0.15;
-        g.setFill(PLAYER_FILL);
-        g.fillOval(p.x() * CELL_SIZE + padding, p.y() * CELL_SIZE + padding,
-                CELL_SIZE - 2 * padding, CELL_SIZE - 2 * padding);
     }
 
     public static void main(String[] args) {
