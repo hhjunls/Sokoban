@@ -88,6 +88,9 @@ public class GameView extends BorderPane {
          * @param levelIndex 关卡序号（从 0 开始）
          */
         void selectLevel(int levelIndex);
+
+        /** 返回主菜单 */
+        void backToMenu();
     }
 
     /** 图片资源加载器（单例；图片缺失时各绘制方法自动回退纯色） */
@@ -226,14 +229,19 @@ public class GameView extends BorderPane {
         return area;
     }
 
-    /** 底部操作栏：提示文字 + 重开 / 下一关按钮。 */
+    /** 底部操作栏：提示文字 + 返回菜单 / 重开 / 下一关按钮。 */
     private HBox buildBottomBar(Actions actions) {
-        Label hint = new Label("方向键 / WASD 移动 · R 重开 · N 下一关 · 数字键选关 · Esc 退出");
+        Label hint = new Label("方向键 / WASD 移动 · R 重开 · N 下一关 · 数字键选关 · Esc 返回菜单");
         hint.setFont(Font.font("Microsoft YaHei", 12));
         hint.setTextFill(TEXT_MUTED);
 
         String buttonStyle = "-fx-background-color: #5a5d5e; -fx-text-fill: #f0f0f0; "
                 + "-fx-background-radius: 6; -fx-font-family: 'Microsoft YaHei'; -fx-font-size: 12;";
+
+        Button menuButton = new Button("返回菜单 (Esc)");
+        menuButton.setFocusTraversable(false);
+        menuButton.setStyle(buttonStyle);
+        menuButton.setOnAction(event -> actions.backToMenu());
 
         Button resetButton = new Button("重开 (R)");
         resetButton.setFocusTraversable(false);
@@ -245,7 +253,7 @@ public class GameView extends BorderPane {
         nextButton.setStyle(buttonStyle);
         nextButton.setOnAction(event -> actions.nextLevel());
 
-        HBox bar = new HBox(10, hint, spacer(), resetButton, nextButton);
+        HBox bar = new HBox(10, hint, spacer(), menuButton, resetButton, nextButton);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(new Insets(10, 14, 10, 14));
         bar.setStyle(BAR_BG);
