@@ -17,6 +17,8 @@ import org.csu.controller.GameController;
 import org.csu.model.base.Direction;
 import org.csu.model.base.GameMap;
 import org.csu.view.GameView;
+import org.csu.view.LevelSelectView;
+import org.csu.view.MainMenuView;
 
 /**
  * 游戏主类（Launcher）：组装 Model / View / Controller，
@@ -26,7 +28,10 @@ import org.csu.view.GameView;
  * 与显示器刷新率解耦；长时间卡顿时用 {@link #MAX_FRAME_TIME} 钳制单帧耗时，
  * 避免"死亡螺旋"式追帧。
  * <p>
- * 操作：方向键 / WASD 移动，R 重置关卡，N 下一关，数字键选关，Esc 退出。
+ * 界面流程：主界面 →（开始游戏）→ 选关界面 →（选择关卡）→ 游戏界面；
+ * 游戏内 Esc 返回主菜单，主界面"退出游戏"结束程序。
+ * <p>
+ * 操作：方向键 / WASD 移动，R 重置关卡，N 下一关，数字键选关，Esc 返回主菜单。
  */
 public class Launcher extends Application {
 
@@ -41,9 +46,17 @@ public class Launcher extends Application {
             "/maps/3.txt"
     };
 
+    /** 当前显示的界面类型 */
+    private enum Screen { MENU, LEVEL_SELECT, GAME }
+
     private GameController controller;
     private GameView view;
+    private MainMenuView mainMenuView;
+    private LevelSelectView levelSelectView;
+    private Scene scene;
     private Stage stage;
+    /** 当前显示的界面 */
+    private Screen currentScreen = Screen.MENU;
     /** 当前关卡序号（从 0 开始） */
     private int currentLevelIndex;
     /** 窗口装饰尺寸（标题栏 + 边框），用于按内容尺寸精确适配窗口 */
@@ -54,7 +67,7 @@ public class Launcher extends Application {
     public void start(Stage stage) {
         this.stage = stage;
 
-        // ---- View：地图渲染与 UI，按钮动作回交给 Controller / Launcher ----
+        // ---- View：游戏界面，按钮动作回交给 Controller / Launcher ----
         view = new GameView(LEVEL_RESOURCES.length, new GameView.Actions() {
             @Override
             public void reset() {
@@ -70,35 +83,63 @@ public class Launcher extends Application {
             public void selectLevel(int levelIndex) {
                 loadLevel(levelIndex);
             }
+
+            @Override
+            public void backToMenu() {
+                showMainMenu();
+            }
+        });
+
+        // ---- View：主界面与选关界面 ----
+        mainMenuView = new MainMenuView(new MainMenuView.Actions() {
+            @Override
+            public void startGame() {
+                showLevelSelect();
+            }
+
+            @Override
+            public void quit() {
+                controller.quitGame();
+            }
+        });
+
+        levelSelectView = new LevelSelectView(LEVEL_RESOURCES.length, new LevelSelectView.Actions() {
+            @Override
+            public void selectLevel(int levelIndex) {
+                loadLevel(levelIndex);
+            }
+
+            @Override
+            public void backToMenu() {
+                showMainMenu();
+            }
         });
 
         // ---- 组装 MVC：Controller 通过回调驱动 View、退出 ----
         controller = new GameController(this::renderView, () -> Platform.exit());
 
-        // ---- 场景只创建一次：尺寸动态跟随视图首选尺寸 ----
-        Scene scene = new Scene(view);
+        // ---- 场景只创建一次：初始显示主界面，root 随界面切换 ----
+        scene = new Scene(mainMenuView);
         scene.setOnKeyPressed(event -> handleKey(event.getCode()));
         stage.setScene(scene);
 
-        // ---- 加载关卡并显示窗口 ----
+        // ---- 显示窗口（初始主界面） ----
         stage.setTitle("推箱子 Sokoban");
         stage.setResizable(false);
-        loadLevel(0);
         stage.show();
 
         // 记录窗口装饰尺寸（初始窗口尺寸与场景尺寸之差）
         windowDecorationWidth = stage.getWidth() - scene.getWidth();
         windowDecorationHeight = stage.getHeight() - scene.getHeight();
         // 窗口完全就绪后再按内容尺寸校正一次（首次显示时的尺寸可能滞后）
-        Platform.runLater(this::fitWindowToView);
+        Platform.runLater(() -> fitWindow(mainMenuView.computeRequiredWidth(), mainMenuView.computeRequiredHeight()));
 
-        controller.startGame();
         startGameLoop();
     }
 
     /**
-     * 加载指定序号的关卡（超出范围自动循环）：
-     * 从 resources 读取关卡文件，按地图尺寸重建画布与场景。
+     * 加载指定序号的关卡（超出范围自动循环）并切换到游戏界面：
+     * 从 resources 读取关卡文件，按地图尺寸重建画布，并让窗口适配新尺寸。
      *
      * @param index 关卡序号（从 0 开始）
      */
@@ -106,23 +147,42 @@ public class Launcher extends Application {
         currentLevelIndex = Math.floorMod(index, LEVEL_RESOURCES.length);
         List<String> lines = readLevelLines(LEVEL_RESOURCES[currentLevelIndex]);
         controller.loadLevel(lines.toArray(new String[0]));
+        controller.startGame();
 
-        // 通知视图进入新关卡（高亮关卡按钮、按地图尺寸重置画布），再让窗口适配新尺寸
+        // 切换到游戏界面（高亮关卡按钮、按地图尺寸重置画布），再让窗口适配新尺寸
+        currentScreen = Screen.GAME;
+        scene.setRoot(view);
         view.beginLevel(currentLevelIndex + 1, controller.getMap());
-        fitWindowToView();
+        fitWindow(view.computeRequiredWidth(), view.computeRequiredHeight());
+    }
+
+    /** 切换到主界面：更新窗口标题并按界面尺寸适配窗口。 */
+    private void showMainMenu() {
+        currentScreen = Screen.MENU;
+        scene.setRoot(mainMenuView);
+        stage.setTitle("推箱子 Sokoban");
+        fitWindow(mainMenuView.computeRequiredWidth(), mainMenuView.computeRequiredHeight());
+    }
+
+    /** 切换到选关界面：更新窗口标题并按界面尺寸适配窗口。 */
+    private void showLevelSelect() {
+        currentScreen = Screen.LEVEL_SELECT;
+        scene.setRoot(levelSelectView);
+        stage.setTitle("推箱子 Sokoban - 选择关卡");
+        fitWindow(levelSelectView.computeRequiredWidth(), levelSelectView.computeRequiredHeight());
     }
 
     /**
-     * 让窗口按视图所需尺寸适配（切关后地图尺寸不同）。
+     * 让窗口按内容尺寸适配（切换界面与切关后尺寸不同）。
      * 非可调整大小的窗口 sizeToScene 不生效，且布局尺寸更新滞后，
-     * 因此直接用视图计算的内容尺寸 + 窗口装饰尺寸设置窗口大小。
+     * 因此直接用内容尺寸 + 窗口装饰尺寸设置窗口大小。
      */
-    private void fitWindowToView() {
+    private void fitWindow(double contentWidth, double contentHeight) {
         if (!stage.isShowing()) {
             return;
         }
-        stage.setWidth(view.computeRequiredWidth() + windowDecorationWidth);
-        stage.setHeight(view.computeRequiredHeight() + windowDecorationHeight);
+        stage.setWidth(contentWidth + windowDecorationWidth);
+        stage.setHeight(contentHeight + windowDecorationHeight);
     }
 
     /**
@@ -166,9 +226,18 @@ public class Launcher extends Application {
     }
 
     /**
-     * 键盘事件分发：方向键 / WASD 移动，R 重置，N 下一关，数字键选关，Esc 退出。
+     * 键盘事件分发（按当前界面分流）：
+     * 游戏界面支持方向键 / WASD 移动、R 重置、N 下一关、数字键选关、Esc 返回主菜单；
+     * 选关界面支持 Esc 返回主菜单；主界面仅用鼠标操作。
      */
     private void handleKey(KeyCode code) {
+        if (currentScreen == Screen.LEVEL_SELECT && code == KeyCode.ESCAPE) {
+            showMainMenu();
+            return;
+        }
+        if (currentScreen != Screen.GAME) {
+            return;
+        }
         switch (code) {
             case UP, W -> controller.onKeyPressed(Direction.UP);
             case DOWN, S -> controller.onKeyPressed(Direction.DOWN);
@@ -176,7 +245,7 @@ public class Launcher extends Application {
             case RIGHT, D -> controller.onKeyPressed(Direction.RIGHT);
             case R -> controller.resetGame();
             case N -> loadLevel(currentLevelIndex + 1);
-            case ESCAPE -> controller.quitGame();
+            case ESCAPE -> showMainMenu();
             default -> {
                 // 数字键 1-9 快速选关
                 String name = code.getName();
@@ -194,6 +263,7 @@ public class Launcher extends Application {
      * AnimationTimer 固定步长主循环：
      * 累积真实经过时间，按 {@link #FIXED_STEP} 逐帧推进逻辑更新；
      * 渲染每帧执行一次，由控制器脏标记决定是否真正重绘。
+     * 仅在游戏界面推进逻辑，主界面 / 选关界面暂停游戏。
      */
     private void startGameLoop() {
         AnimationTimer timer = new AnimationTimer() {
@@ -208,6 +278,13 @@ public class Launcher extends Application {
                 }
                 double frameTime = (now - lastTime) / 1_000_000_000.0;
                 lastTime = now;
+
+                // 非游戏界面：不推进逻辑，仅保持时间基准
+                if (currentScreen != Screen.GAME) {
+                    accumulator = 0;
+                    return;
+                }
+
                 frameTime = Math.min(frameTime, MAX_FRAME_TIME);
                 accumulator += frameTime;
 
